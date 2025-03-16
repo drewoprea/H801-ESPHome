@@ -1,0 +1,184 @@
+esphome:
+  name: H801-Lights
+esp8266:
+  board: esp01_1m
+# Enable logging
+logger:
+  level: DEBUG
+  hardware_uart: UART1
+# Enable Home Assistant API
+api: 
+#  password: "H801"
+  encryption:
+    key: " "
+  reboot_timeout: 0s
+ota:
+  - platform: esphome
+    password: "H801"
+web_server:
+  port: 80
+wifi:
+  ssid: "SSID"
+  password: "PASSWORD"
+    # Optional manual IP
+  manual_ip:
+    static_ip: 192.168.1.10
+    gateway: 192.168.1.1
+    subnet: 255.255.255.0
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "H801 Fallback Hotspot"
+    password: "password"
+captive_portal:
+    
+output:
+  - platform: esp8266_pwm
+    pin: 12
+    frequency: 1000 Hz
+    id: pwm_b
+  - platform: esp8266_pwm
+    pin: 13
+    frequency: 1000 Hz
+    id: pwm_r
+  - platform: esp8266_pwm
+    pin: 15
+    frequency: 1000 Hz
+    id: pwm_g
+  - platform: esp8266_pwm
+    pin: 14
+    frequency: 1000 Hz
+    id: pwm_w1
+#  - platform: esp8266_pwm
+#    pin: 4
+#    frequency: 1000 Hz
+#    id: pwm_w2
+  - id: green_led_output
+    platform: gpio
+    pin: 
+      number: GPIO1
+      inverted: true
+  - id: red_led_output
+    platform: gpio
+    pin: 
+      number: GPIO5
+      inverted: true
+light:
+  # - platform: rgbw
+  - platform: rgb
+    name: "Colored LED Lights"
+    red: pwm_r
+    green: pwm_g
+    blue: pwm_b
+    id: rgb_strip 
+  - platform: monochromatic
+    name: "White LED Lights"
+    output: pwm_w1
+    id: w_strip
+  - platform: binary
+    name: "Green"
+    internal: true
+    id: Green_LED
+    output: green_led_output
+  - platform: binary
+    name: "Red"
+    internal: true
+    id: Red_LED
+    output: red_led_output
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO0
+      mode: INPUT_PULLUP
+      inverted: true
+    id: button
+    on_click:
+      min_length: 10ms
+      max_length: 250ms
+      then:
+      - state_machine.transition: CLICK
+    on_multi_click:
+    - timing:
+        - ON for at least 0.5s
+      then:
+        - state_machine.transition: HOLD    
+external_components:
+  - source:
+      type: git
+      url: https://github.com/muxa/esphome-state-machine
+state_machine:
+  - name: H801 Light Control
+    states:
+      - name: "OFF"
+        on_enter:
+          - light.turn_off: w_strip
+          - light.turn_off: rgb_strip
+      - name: "White"
+        on_enter:
+          - light.turn_on: w_strip
+          - light.turn_off: rgb_strip
+      - name: "Color"
+        on_enter:
+          - light.turn_on: rgb_strip
+          - light.turn_off: w_strip
+      - name: "White_Brightness"
+        on_enter:
+          - light.turn_on: Red_LED
+        on_leave:
+          - light.turn_off: Red_LED
+      - name: "Color_Select"
+        on_enter:
+          - light.turn_on: Green_LED
+        on_leave:
+          - light.turn_off: Green_LED
+    inputs:
+      # - name: NEXT
+      - name: CLICK
+        transitions:
+          - OFF -> White
+          - White -> Color
+          - Color -> OFF
+          - from: "White_Brightness"
+            to: "White_Brightness"
+            on_transition: # cycle through brightness levels
+              - lambda: |-
+                  auto call = id(w_strip).turn_on();
+                  auto brightness = id(w_strip).current_values.get_brightness();
+                  if (brightness > 0.31) {                    
+                    call.set_brightness(brightness - 0.1);
+                  } else {
+                    call.set_brightness(1.0);
+                  }
+                  call.perform();
+          - from: "Color_Select"
+            to: "Color_Select"
+            on_transition: # cycle through colors
+              - lambda: |-
+                  auto call = id(rgb_strip).turn_on();
+                  float red = id(rgb_strip).remote_values.get_red();
+                  float green = id(rgb_strip).remote_values.get_green();
+                  float blue = id(rgb_strip).remote_values.get_blue();
+                  if (red==1 && green==0 && blue==0) {
+                    call.set_rgb(1.0, 0.45, 0.05); // orange
+                  } else if (red==1 && green!=0 && green<=0.5 && blue!=0 && blue<=0.1) {
+                    call.set_rgb(1.0, 1.0, 0.0); // yellow
+                  } else if (red==1 && green==1 && blue==0) {
+                    call.set_rgb(0.0, 1.0, 0.0); // green
+                  } else if (red==0 && green==1 && blue==0) {
+                    call.set_rgb(0.0, 0.0, 1.0); // blue
+                  } else if (red==0 && green==0 && blue==1) {
+                    call.set_rgb(0.0, 1.0, 1.0); // cyan
+                  } else if (red==0 && green==1 && blue==1) {
+                    call.set_rgb(0.67, 0.33, 1.0); //purple
+                  } else if (red!=0 && red<=0.75 && green!=0 && green<=0.4 && blue==1) {                    
+                    call.set_rgb(1.0, 0.0, 1.0); // magenta
+                  } else {
+                    call.set_rgb(1.0, 0.0, 0.0); // red
+                  }                    
+                  call.set_brightness(0.5); // set half brightness 
+                  call.perform();
+      - name: HOLD
+        transitions:
+          - White_Brightness -> White
+          - White -> White_Brightness
+          - Color_Select -> Color
+          - Color -> Color_Select
